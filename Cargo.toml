@@ -1,0 +1,29 @@
+[package]
+name = "smaugs-treasure"
+version = "0.1.0"
+edition = "2021"
+authors = ["Johan Alexis Duque Cadena"]
+
+[dependencies]
+# CSV with serde support
+csv = "1.3"
+serde = { version = "1.0", features = ["derive"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Error handling
+thiserror = "2.0.18"
+anyhow = "1.0"
+
+# Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[lib]
+name = "smaugs_treasure"
+path = "src/lib.rs"
+
+[[bin]]
+name = "smaugs-treasure"
+path = "src/main.rs"
