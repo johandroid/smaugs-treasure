@@ -61,3 +61,102 @@ impl CsvProcessor {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_temp_csv(content: &str) -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(content.as_bytes()).unwrap();
+        file.flush().unwrap();
+        file
+    }
+
+    #[test]
+    fn test_process_valid_csv() {
+        let csv_data = "type,client,tx,amount\ndeposit,1,1,100.0\nwithdrawal,1,2,50.0\n";
+        let file = create_temp_csv(csv_data);
+        let mut processor = CsvProcessor::from_path(file.path()).unwrap();
+
+        let mut transactions = Vec::new();
+        processor
+            .process_stream(|result| {
+                if let Ok(tx) = result {
+                    transactions.push(tx);
+                }
+            })
+            .unwrap();
+
+        assert_eq!(transactions.len(), 2);
+        assert_eq!(transactions[0].client, 1);
+        assert_eq!(transactions[0].tx, 1);
+    }
+
+    #[test]
+    fn test_process_with_whitespace() {
+        let csv_data = "type,client,tx,amount\n  deposit  ,  1  ,  1  ,  100.0  \n";
+        let file = create_temp_csv(csv_data);
+        let mut processor = CsvProcessor::from_path(file.path()).unwrap();
+
+        let mut transactions = Vec::new();
+        processor
+            .process_stream(|result| {
+                if let Ok(tx) = result {
+                    transactions.push(tx);
+                }
+            })
+            .unwrap();
+
+        assert_eq!(transactions.len(), 1);
+    }
+
+    #[test]
+    fn test_process_without_amount() {
+        let csv_data = "type,client,tx,amount\ndispute,1,1,\n";
+        let file = create_temp_csv(csv_data);
+        let mut processor = CsvProcessor::from_path(file.path()).unwrap();
+
+        let mut transactions = Vec::new();
+        processor
+            .process_stream(|result| {
+                if let Ok(tx) = result {
+                    transactions.push(tx);
+                }
+            })
+            .unwrap();
+
+        assert_eq!(transactions.len(), 1);
+        assert!(transactions[0].amount.is_none());
+    }
+
+    #[test]
+    fn test_process_invalid_transaction_type() {
+        let csv_data = "type,client,tx,amount\ninvalid,1,1,100.0\n";
+        let file = create_temp_csv(csv_data);
+        let mut processor = CsvProcessor::from_path(file.path()).unwrap();
+
+        let mut errors = 0;
+        processor
+            .process_stream(|result| {
+                if result.is_err() {
+                    errors += 1;
+                }
+            })
+            .unwrap();
+
+        assert_eq!(errors, 1);
+    }
+
+    #[test]
+    fn test_line_number_tracking() {
+        let csv_data = "type,client,tx,amount\ndeposit,1,1,100.0\ndeposit,1,2,200.0\n";
+        let file = create_temp_csv(csv_data);
+        let mut processor = CsvProcessor::from_path(file.path()).unwrap();
+
+        processor.process_stream(|_| {}).unwrap();
+        assert_eq!(processor.line_number, 2);
+    }
+}

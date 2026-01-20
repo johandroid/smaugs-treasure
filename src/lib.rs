@@ -25,11 +25,14 @@
 
 pub mod cli;
 pub mod csv_processor;
+pub mod engine;
 pub mod error;
+pub mod storage;
 pub mod types;
 
 // Re-export commonly used types
 pub use cli::{show_hire_info, Cli};
 pub use csv_processor::CsvProcessor;
+pub use engine::PaymentProcessor;
 pub use error::{PaymentError, Result};
 pub use types::{Account, Amount, Transaction, TransactionType};
