@@ -3,7 +3,7 @@
 use crate::error::{ProcessingError, Result};
 use crate::storage::{active_count, mark_chargedback, mark_disputed, mark_resolved, DisputeStore};
 use crate::storage::{AccountState, TxStore};
-use crate::types::{Account, StoredDeposit, Transaction, TransactionType, TxId};
+use crate::types::{Account, Amount, StoredDeposit, Transaction, TransactionType, TxId};
 use tracing::{debug, error, info, warn};
 
 /// Main payment processor that handles all transaction types.
@@ -11,6 +11,14 @@ pub struct PaymentProcessor {
     state: AccountState,
     tx_store: TxStore,
     dispute_store: DisputeStore,
+}
+
+/// Statistics about the processor state.
+#[derive(Debug, Clone, Copy)]
+pub struct ProcessorStats {
+    pub accounts: usize,
+    pub transactions: usize,
+    pub active_disputes: usize,
 }
 
 impl Default for PaymentProcessor {
@@ -44,6 +52,24 @@ impl PaymentProcessor {
         Ok(())
     }
 
+    /// Gets or creates an account for a client.
+    fn get_or_create_account(&mut self, client: u16) -> &mut Account {
+        self.state
+            .entry(client)
+            .or_insert_with(|| Account::new(client))
+    }
+
+    /// Extracts the required amount from a transaction.
+    fn get_required_amount(tx: &Transaction) -> Result<Amount> {
+        tx.amount.ok_or_else(|| {
+            ProcessingError::TransactionNotFound {
+                client: tx.client,
+                tx_id: tx.tx,
+            }
+            .into()
+        })
+    }
+
     /// Gets a deposit and verifies the client owns it.
     fn get_verified_deposit(&self, client: u16, tx_id: TxId) -> Result<&StoredDeposit> {
         let deposit = self
@@ -65,74 +91,60 @@ impl PaymentProcessor {
 
     /// Handles a deposit transaction.
     fn handle_deposit(&mut self, tx: Transaction) -> Result<()> {
+        let (client, tx_id) = (tx.client, tx.tx);
+        let amount = Self::get_required_amount(&tx)?;
         debug!(
-            "Processing deposit: client={}, tx={}, amount={:?}",
-            tx.client, tx.tx, tx.amount
+            "Processing deposit: client={}, tx={}, amount={}",
+            client, tx_id, amount
         );
 
-        let amount = tx.amount.ok_or(ProcessingError::TransactionNotFound {
-            client: tx.client,
-            tx_id: tx.tx,
-        })?;
-
-        let account = self.state.entry(tx.client).or_insert_with(|| {
-            debug!("Creating new account for client {}", tx.client);
-            Account::new(tx.client)
-        });
-
-        account.available = account.available.add_checked(amount)?;
-
-        let tx_id = tx.tx;
-        let client_id = tx.client;
         if self.tx_store.contains_key(&tx_id) {
             warn!("Duplicate transaction ID detected: {}", tx_id);
             return Err(ProcessingError::DuplicateTransaction { tx_id }.into());
         }
-        self.tx_store
-            .insert(tx_id, StoredDeposit { client_id, amount });
 
+        let account = self.get_or_create_account(client);
+        account.available = account.available.add_checked(amount)?;
+
+        self.tx_store.insert(
+            tx_id,
+            StoredDeposit {
+                client_id: client,
+                amount,
+            },
+        );
         info!(
             "Deposit processed: client={}, tx={}, amount={}",
-            client_id, tx_id, amount
+            client, tx_id, amount
         );
-
         Ok(())
     }
 
     /// Handles a withdrawal transaction.
     fn handle_withdrawal(&mut self, tx: Transaction) -> Result<()> {
+        let (client, tx_id) = (tx.client, tx.tx);
+        let amount = Self::get_required_amount(&tx)?;
         debug!(
-            "Processing withdrawal: client={}, tx={}, amount={:?}",
-            tx.client, tx.tx, tx.amount
+            "Processing withdrawal: client={}, tx={}, amount={}",
+            client, tx_id, amount
         );
 
-        let amount = tx.amount.ok_or(ProcessingError::TransactionNotFound {
-            client: tx.client,
-            tx_id: tx.tx,
-        })?;
-
-        let account = self.state.entry(tx.client).or_insert_with(|| {
-            debug!("Creating new account for client {}", tx.client);
-            Account::new(tx.client)
-        });
-
+        let account = self.get_or_create_account(client);
         if !account.has_sufficient_funds(amount) {
             warn!(
                 "Insufficient funds for withdrawal: client={}, available={}, requested={}",
-                tx.client, account.available, amount
+                client, account.available, amount
             );
             return Err(
-                ProcessingError::insufficient_funds(tx.client, account.available, amount).into(),
+                ProcessingError::insufficient_funds(client, account.available, amount).into(),
             );
         }
 
         account.available = account.available.sub_checked(amount)?;
-
         info!(
             "Withdrawal processed: client={}, tx={}, amount={}",
-            tx.client, tx.tx, amount
+            client, tx_id, amount
         );
-
         Ok(())
     }
 
@@ -161,10 +173,7 @@ impl PaymentProcessor {
         let amount = deposit.amount;
         mark_disputed(&mut self.dispute_store, client, tx_id)?;
 
-        let account = self
-            .state
-            .entry(client)
-            .or_insert_with(|| Account::new(client));
+        let account = self.get_or_create_account(client);
         account.available = account.available.sub_checked(amount)?;
         account.held = account.held.add_checked(amount)?;
 
@@ -183,10 +192,7 @@ impl PaymentProcessor {
         let amount = self.get_verified_deposit(client, tx_id)?.amount;
         mark_resolved(&mut self.dispute_store, client, tx_id)?;
 
-        let account = self
-            .state
-            .entry(client)
-            .or_insert_with(|| Account::new(client));
+        let account = self.get_or_create_account(client);
         account.held = account.held.sub_checked(amount)?;
         account.available = account.available.add_checked(amount)?;
 
@@ -205,10 +211,7 @@ impl PaymentProcessor {
         let amount = self.get_verified_deposit(client, tx_id)?.amount;
         mark_chargedback(&mut self.dispute_store, client, tx_id)?;
 
-        let account = self
-            .state
-            .entry(client)
-            .or_insert_with(|| Account::new(client));
+        let account = self.get_or_create_account(client);
         account.held = account.held.sub_checked(amount)?;
         account.lock();
 
@@ -248,8 +251,15 @@ impl PaymentProcessor {
         result
     }
 
-    /// Finalizes processing and returns the final account state.
-    pub fn finalize(self) -> Vec<Account> {
+    /// Finalizes and prints accounts as CSV to stdout.
+    pub fn finalize_to_csv(self) {
+        let mut stdout = std::io::stdout().lock();
+        self.finalize_to_writer(&mut stdout)
+            .expect("Can't write to stdout, check your command.");
+    }
+
+    /// Finalizes and writes accounts as CSV to the given writer.
+    pub fn finalize_to_writer<W: std::io::Write>(self, writer: &mut W) -> std::io::Result<()> {
         info!("Finalizing payment processor");
         let stats = self.stats();
         info!(
@@ -257,22 +267,8 @@ impl PaymentProcessor {
             stats.accounts, stats.transactions, stats.active_disputes
         );
 
-        let mut accounts: Vec<Account> = self.state.into_values().collect();
-        accounts.sort_by_key(|a| a.client);
-        accounts
-    }
-
-    /// Finalizes and prints accounts as CSV to stdout.
-    pub fn finalize_to_csv(self) {
-        let mut stdout = std::io::stdout().lock();
-        self.finalize_to_writer(&mut stdout).unwrap();
-    }
-
-    /// Finalizes and writes accounts as CSV to the given writer.
-    pub fn finalize_to_writer<W: std::io::Write>(self, writer: &mut W) -> std::io::Result<()> {
-        let accounts = self.finalize();
         writeln!(writer, "client,available,held,total,locked")?;
-        for account in accounts {
+        for account in self.state.into_values() {
             writeln!(
                 writer,
                 "{},{},{},{},{}",
@@ -285,12 +281,4 @@ impl PaymentProcessor {
         }
         Ok(())
     }
-}
-
-/// Statistics about the processor state.
-#[derive(Debug, Clone, Copy)]
-pub struct ProcessorStats {
-    pub accounts: usize,
-    pub transactions: usize,
-    pub active_disputes: usize,
 }

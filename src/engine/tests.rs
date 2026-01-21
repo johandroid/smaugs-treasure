@@ -1,19 +1,47 @@
-use crate::types::Amount;
-
 use crate::engine::PaymentProcessor;
-use crate::types::Transaction;
+use crate::types::{Account, Amount, Transaction};
+
+/// Parses CSV output into a Vec of Accounts.
+fn parse_accounts(processor: PaymentProcessor) -> Vec<Account> {
+    let mut buffer = Vec::new();
+    processor.finalize_to_writer(&mut buffer).unwrap();
+    let output = String::from_utf8(buffer).unwrap();
+
+    output
+        .lines()
+        .skip(1) // Skip header
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() == 5 {
+                Some(Account {
+                    client: parts[0].parse().unwrap(),
+                    available: parts[1].parse().unwrap(),
+                    held: parts[2].parse().unwrap(),
+                    locked: parts[4].parse().unwrap(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn find_account(accounts: &[Account], client: u16) -> &Account {
+    accounts.iter().find(|a| a.client == client).unwrap()
+}
 
 #[test]
 fn test_deposit() {
     let mut processor = PaymentProcessor::new();
-    let tx = Transaction::deposit(1, 1, Amount::from_raw(10_000));
+    processor
+        .process_transaction(Transaction::deposit(1, 1, Amount::from_raw(10_000)))
+        .unwrap();
 
-    processor.process_transaction(tx).unwrap();
-
-    let accounts = processor.finalize();
+    let accounts = parse_accounts(processor);
     assert_eq!(accounts.len(), 1);
-    assert_eq!(accounts[0].available, Amount::from_raw(10_000));
-    assert_eq!(accounts[0].total(), Amount::from_raw(10_000));
+    let account = find_account(&accounts, 1);
+    assert_eq!(account.available, Amount::from_raw(10_000));
+    assert_eq!(account.total(), Amount::from_raw(10_000));
 }
 
 #[test]
@@ -23,13 +51,13 @@ fn test_withdrawal() {
     processor
         .process_transaction(Transaction::deposit(1, 1, Amount::from_raw(10_000)))
         .unwrap();
-
     processor
         .process_transaction(Transaction::withdrawal(1, 2, Amount::from_raw(3_000)))
         .unwrap();
 
-    let accounts = processor.finalize();
-    assert_eq!(accounts[0].available, Amount::from_raw(7_000));
+    let accounts = parse_accounts(processor);
+    let account = find_account(&accounts, 1);
+    assert_eq!(account.available, Amount::from_raw(7_000));
 }
 
 #[test]
@@ -42,7 +70,6 @@ fn test_insufficient_funds() {
 
     let result =
         processor.process_transaction(Transaction::withdrawal(1, 2, Amount::from_raw(10_000)));
-
     assert!(result.is_err());
 }
 
@@ -53,15 +80,15 @@ fn test_dispute_flow() {
     processor
         .process_transaction(Transaction::deposit(1, 1, Amount::from_raw(10_000)))
         .unwrap();
-
     processor
         .process_transaction(Transaction::dispute(1, 1))
         .unwrap();
 
-    let accounts = processor.finalize();
-    assert_eq!(accounts[0].available, Amount::zero());
-    assert_eq!(accounts[0].held, Amount::from_raw(10_000));
-    assert_eq!(accounts[0].total(), Amount::from_raw(10_000));
+    let accounts = parse_accounts(processor);
+    let account = find_account(&accounts, 1);
+    assert_eq!(account.available, Amount::zero());
+    assert_eq!(account.held, Amount::from_raw(10_000));
+    assert_eq!(account.total(), Amount::from_raw(10_000));
 }
 
 #[test]
@@ -74,14 +101,14 @@ fn test_resolve_flow() {
     processor
         .process_transaction(Transaction::dispute(1, 1))
         .unwrap();
-
     processor
         .process_transaction(Transaction::resolve(1, 1))
         .unwrap();
 
-    let accounts = processor.finalize();
-    assert_eq!(accounts[0].available, Amount::from_raw(10_000));
-    assert_eq!(accounts[0].held, Amount::zero());
+    let accounts = parse_accounts(processor);
+    let account = find_account(&accounts, 1);
+    assert_eq!(account.available, Amount::from_raw(10_000));
+    assert_eq!(account.held, Amount::zero());
 }
 
 #[test]
@@ -94,14 +121,14 @@ fn test_chargeback_locks_account() {
     processor
         .process_transaction(Transaction::dispute(1, 1))
         .unwrap();
-
     processor
         .process_transaction(Transaction::chargeback(1, 1))
         .unwrap();
 
-    let accounts = processor.finalize();
-    assert!(accounts[0].is_locked());
-    assert_eq!(accounts[0].total(), Amount::zero());
+    let accounts = parse_accounts(processor);
+    let account = find_account(&accounts, 1);
+    assert!(account.locked);
+    assert_eq!(account.total(), Amount::zero());
 }
 
 #[test]
@@ -133,7 +160,7 @@ fn test_multiple_clients() {
         .process_transaction(Transaction::deposit(2, 2, Amount::from_raw(20_000)))
         .unwrap();
 
-    let accounts = processor.finalize();
+    let accounts = parse_accounts(processor);
     assert_eq!(accounts.len(), 2);
 }
 
@@ -141,7 +168,6 @@ fn test_multiple_clients() {
 fn test_dispute_unknown_transaction_ignored() {
     let mut processor = PaymentProcessor::new();
 
-    // Dispute a non-existent transaction - should be silently ignored
     let result = processor.process_transaction(Transaction::dispute(1, 999));
     assert!(result.is_ok());
 }
@@ -150,12 +176,10 @@ fn test_dispute_unknown_transaction_ignored() {
 fn test_client_mismatch() {
     let mut processor = PaymentProcessor::new();
 
-    // Client 1 deposits
     processor
         .process_transaction(Transaction::deposit(1, 1, Amount::from_raw(10_000)))
         .unwrap();
 
-    // Client 2 tries to dispute client 1's deposit
     let result = processor.process_transaction(Transaction::dispute(2, 1));
     assert!(result.is_err());
 }

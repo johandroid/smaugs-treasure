@@ -20,7 +20,7 @@
 //!     }
 //! }).unwrap();
 //!
-//! let accounts = processor.finalize();
+//! processor.finalize_to_csv();
 //! ```
 
 pub mod cli;

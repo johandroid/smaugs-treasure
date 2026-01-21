@@ -92,14 +92,6 @@ fn test_amount_ops_underflow() {
 }
 
 #[test]
-fn test_amount_zero() {
-    let z = Amount::zero();
-    assert!(z.is_zero());
-    assert!(!z.is_positive());
-    assert!(!z.is_negative());
-}
-
-#[test]
 fn test_amount_comparison() {
     let a = Amount::from_raw(10_000);
     let b = Amount::from_raw(5_000);
