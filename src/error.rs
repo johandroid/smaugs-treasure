@@ -68,27 +68,8 @@ pub enum ProcessingError {
         requested: crate::types::Amount,
     },
 
-    #[error("Transaction {tx_id} not found for dispute by client {client}")]
-    TransactionNotFound { client: u16, tx_id: u32 },
-
     #[error("Account {client} is locked")]
     AccountLocked { client: u16 },
-
-    #[error("Dispute not found for transaction {tx_id} by client {client}")]
-    DisputeNotFound { client: u16, tx_id: u32 },
-
-    #[error("Transaction {tx_id} already disputed (client {client})")]
-    AlreadyDisputed { client: u16, tx_id: u32 },
-
-    #[error("Dispute not active for transaction {tx_id} (client {client})")]
-    DisputeNotActive { client: u16, tx_id: u32 },
-
-    #[error("Client mismatch: transaction {tx_id} belongs to client {owner}, not {requester}")]
-    ClientMismatch {
-        tx_id: u32,
-        owner: u16,
-        requester: u16,
-    },
 
     #[error("Duplicate transaction ID: {tx_id}")]
     DuplicateTransaction { tx_id: u32 },

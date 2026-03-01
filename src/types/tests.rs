@@ -51,6 +51,9 @@ fn test_amount_from_str() {
     assert_eq!(Amount::from_str("0.0001").unwrap().as_raw(), 1);
     assert_eq!(Amount::from_str("100").unwrap().as_raw(), 1_000_000);
     assert_eq!(Amount::from_str("-5.5").unwrap().as_raw(), -55_000);
+    assert_eq!(Amount::from_str("-0.5").unwrap().as_raw(), -5_000);
+    assert_eq!(Amount::from_str("-0.0001").unwrap().as_raw(), -1);
+    assert_eq!(Amount::from_str("+0.5").unwrap().as_raw(), 5_000);
 }
 
 #[test]
@@ -108,6 +111,9 @@ fn test_parse_error_too_many_decimals() {
 fn test_parse_error_invalid_format() {
     assert!(Amount::from_str("abc").is_err());
     assert!(Amount::from_str("1.2.3").is_err());
+    assert!(Amount::from_str("-").is_err());
+    assert!(Amount::from_str("+").is_err());
+    assert!(Amount::from_str("-.5").is_err());
 }
 
 // Transaction tests

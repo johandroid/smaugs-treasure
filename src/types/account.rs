@@ -2,6 +2,7 @@
 
 use crate::types::Amount;
 use serde::{Deserialize, Serialize};
+use tracing::error;
 
 /// Represents a client account with available, held, and locked status.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,10 +33,16 @@ impl Account {
 
     /// Calculates the total funds (available + held).
     pub fn total(&self) -> Amount {
-        // This should never overflow in practice since we check on each operation
-        self.available
-            .add_checked(self.held)
-            .unwrap_or(Amount::zero())
+        match self.available.add_checked(self.held) {
+            Ok(total) => total,
+            Err(e) => {
+                error!(
+                    "Account invariant error for client {} while calculating total: {}",
+                    self.client, e
+                );
+                Amount::zero()
+            }
+        }
     }
 
     /// Checks if the account has sufficient available funds.

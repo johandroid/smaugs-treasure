@@ -173,13 +173,63 @@ fn test_dispute_unknown_transaction_ignored() {
 }
 
 #[test]
-fn test_client_mismatch() {
+fn test_dispute_uses_referenced_transaction_owner() {
     let mut processor = PaymentProcessor::new();
 
     processor
         .process_transaction(Transaction::deposit(1, 1, Amount::from_raw(10_000)))
         .unwrap();
 
-    let result = processor.process_transaction(Transaction::dispute(2, 1));
+    processor
+        .process_transaction(Transaction::dispute(2, 1))
+        .unwrap();
+
+    let accounts = parse_accounts(processor);
+    let account = find_account(&accounts, 1);
+    assert_eq!(account.available, Amount::zero());
+    assert_eq!(account.held, Amount::from_raw(10_000));
+}
+
+#[test]
+fn test_duplicate_withdrawal_tx_rejected() {
+    let mut processor = PaymentProcessor::new();
+
+    processor
+        .process_transaction(Transaction::deposit(1, 1, Amount::from_raw(20_000)))
+        .unwrap();
+    processor
+        .process_transaction(Transaction::withdrawal(1, 2, Amount::from_raw(5_000)))
+        .unwrap();
+
+    let result =
+        processor.process_transaction(Transaction::withdrawal(1, 2, Amount::from_raw(1_000)));
     assert!(result.is_err());
+
+    let accounts = parse_accounts(processor);
+    let account = find_account(&accounts, 1);
+    assert_eq!(account.available, Amount::from_raw(15_000));
+}
+
+#[test]
+fn test_deposit_and_withdrawal_cannot_share_tx_id() {
+    let mut processor = PaymentProcessor::new();
+
+    processor
+        .process_transaction(Transaction::deposit(1, 1, Amount::from_raw(10_000)))
+        .unwrap();
+
+    let result =
+        processor.process_transaction(Transaction::withdrawal(1, 1, Amount::from_raw(1_000)));
+    assert!(result.is_err());
+
+    let accounts = parse_accounts(processor);
+    let account = find_account(&accounts, 1);
+    assert_eq!(account.available, Amount::from_raw(10_000));
+}
+
+#[test]
+fn test_resolve_unknown_transaction_ignored() {
+    let mut processor = PaymentProcessor::new();
+    let result = processor.process_transaction(Transaction::resolve(1, 42));
+    assert!(result.is_ok());
 }

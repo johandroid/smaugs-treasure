@@ -2,6 +2,6 @@
 
 mod processor;
 
-pub use processor::{PaymentProcessor, ProcessorStats};
+pub use processor::{IgnoredReason, PaymentProcessor, ProcessingOutcome};
 #[cfg(test)]
 mod tests;

@@ -23,6 +23,7 @@ The project is structured as a single crate with both library and binary:
 ```
 src/
 ├── main.rs              # CLI entry point
+├── app.rs               # Binary orchestration (CLI + pipeline)
 ├── lib.rs               # Public API and re-exports
 ├── cli.rs               # Command-line argument parsing
 ├── csv_processor.rs     # Streaming CSV reader
@@ -50,12 +51,13 @@ Maps client IDs to their account state. Each `Account` contains:
 - `held`: Funds held due to active disputes
 - `locked`: Whether the account is frozen (after chargeback)
 
-### TxStore (`HashMap<TxId, StoredDeposit>`)
-Stores deposit transactions for potential dispute resolution. Each `StoredDeposit` contains:
-- `client_id`: The client who made the deposit
-- `amount`: The deposit amount
+### TxStore (`HashMap<TxId, MonetaryTx>`)
+Stores processed monetary transactions (deposits and withdrawals). Each `MonetaryTx` contains:
+- `client_id`: The client who owns the transaction
+- `amount`: The transaction amount
+- `kind`: Whether it is a deposit or withdrawal
 
-Only deposits are stored since withdrawals cannot be disputed (funds already left the account).
+Dispute-related operations only apply when the referenced transaction is a deposit.
 
 ### DisputeStore (`HashMap<TxId, DisputeStatus>`)
 Tracks the status of disputes with a simple state machine:
@@ -162,26 +164,31 @@ Based on typical payment processing logic and interpretation of the specificatio
 ### 1. Only Deposits Can Be Disputed
 **Rationale**: Withdrawals represent funds that have already left the account. There are no funds to "hold" for a dispute. The specification mentions "a client's claim that a transaction was erroneous and should be reversed" - reversing a withdrawal doesn't make sense as the funds are already gone.
 
-**Behavior**: Only deposits are stored for potential disputes. Attempting to dispute a withdrawal or non-existent transaction is silently ignored.
+**Behavior**: Dispute, resolve, and chargeback operations only apply when the referenced transaction is a known deposit. References to unknown transactions or withdrawals are silently ignored.
 
-### 2. Chargebacks Can Be Applied Directly to Active Disputes
+### 2. Referenced Transaction Is Source of Truth
+**Rationale**: Dispute-like events reference an existing transaction by `tx`. The original transaction record determines the owning client.
+
+**Behavior**: For dispute/resolve/chargeback, the processor applies operations to the original transaction owner, even if the input row has a mismatched `client`.
+
+### 3. Chargebacks Can Be Applied Directly to Active Disputes
 **Rationale**: The specification states a chargeback is "the final state of a dispute", not "the final state after a resolve". This allows two valid dispute resolution paths:
 - `Dispute → Resolve`
 - `Dispute → Chargeback`
 
 **Behavior**: A resolve is not required before a chargeback. However, once a dispute is resolved or chargedback, it cannot be disputed again.
 
-### 3. Transaction IDs Are Globally Unique
-**Rationale**: The specification states "transaction IDs (tx) are globally unique". This means a transaction ID cannot be reused across different clients.
+### 4. Monetary Transaction IDs Are Globally Unique
+**Rationale**: The specification states "transaction IDs (tx) are globally unique".
 
-**Behavior**: Attempting to create a transaction with a duplicate ID will result in a `DuplicateTransaction` error.
+**Behavior**: Deposits and withdrawals reserve global transaction IDs. Reusing an ID across any deposit/withdrawal row results in `DuplicateTransaction`.
 
-### 4. Locked Accounts Remain Locked Permanently
+### 5. Locked Accounts Remain Locked Permanently
 **Rationale**: The specification states "If a chargeback occurs the client's account should be immediately frozen" without mentioning any unlock mechanism.
 
 **Behavior**: Once an account is locked due to a chargeback, all subsequent transactions for that client will fail with an `AccountLocked` error.
 
-### 5. Errors Do Not Stop Processing
+### 6. Errors Do Not Stop Processing
 **Rationale**: To maximize throughput and provide the most complete output possible, individual transaction errors should not halt the entire processing pipeline.
 
 **Behavior**: When a transaction fails (e.g., insufficient funds, invalid dispute), the error is logged (if `--verbose` is enabled) and processing continues with the next transaction.
@@ -190,15 +197,17 @@ Based on typical payment processing logic and interpretation of the specificatio
 
 The processor continues processing even when individual transactions fail. Errors are logged to stderr when `--verbose` is enabled.
 
-Common errors:
+Common hard errors:
 - **Insufficient funds**: Withdrawal amount exceeds available balance
-- **Transaction not found**: Resolve/chargeback references a non-existent deposit
 - **Account locked**: Transaction attempted on a locked account
-- **Duplicate transaction**: Transaction ID already exists
-- **Already disputed**: Transaction has already been disputed
-- **Dispute not active**: Attempting resolve/chargeback on a non-active dispute
-- **Client mismatch**: Client attempting to dispute another client's deposit
+- **Duplicate transaction**: Deposit/withdrawal transaction ID already exists
 - **Amount overflow/underflow**: Arithmetic operation would overflow i64
+
+Ignored (non-fatal) partner errors:
+- Referencing a missing transaction in dispute/resolve/chargeback
+- Referencing a withdrawal in dispute/resolve/chargeback
+- Re-disputing a finalized transaction
+- Resolve/chargeback on a non-active dispute
 
 ## Testing
 

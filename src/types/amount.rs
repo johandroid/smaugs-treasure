@@ -105,30 +105,42 @@ impl FromStr for Amount {
     fn from_str(s: &str) -> std::result::Result<Self, AmountError> {
         let s = s.trim();
 
-        // Handle empty string
         if s.is_empty() {
             return Err(AmountError::ParseError("empty string".to_string()));
         }
 
-        // Split by decimal point
-        let parts: Vec<&str> = s.split('.').collect();
+        let (sign, unsigned) = match s.as_bytes().first() {
+            Some(b'+') => (1_i64, &s[1..]),
+            Some(b'-') => (-1_i64, &s[1..]),
+            _ => (1_i64, s),
+        };
 
-        if parts.len() > 2 {
+        if unsigned.is_empty() {
+            return Err(AmountError::ParseError("missing numeric value".to_string()));
+        }
+
+        let mut parts = unsigned.split('.');
+        let integer_str = parts.next().unwrap_or_default();
+        let decimal_str = parts.next();
+
+        if parts.next().is_some() {
             return Err(AmountError::ParseError(
                 "multiple decimal points".to_string(),
             ));
         }
 
-        // Parse integer part
-        let integer_part: i64 = parts[0]
-            .parse()
-            .map_err(|_| AmountError::ParseError(format!("invalid integer part: {}", parts[0])))?;
+        if integer_str.is_empty() || !integer_str.chars().all(|c| c.is_ascii_digit()) {
+            return Err(AmountError::ParseError(format!(
+                "invalid integer part: {}",
+                integer_str
+            )));
+        }
 
-        // Parse decimal part (if exists)
-        let decimal_part: i64 = if parts.len() == 2 {
-            let decimal_str = parts[1];
+        let integer_part: i64 = integer_str.parse().map_err(|_| {
+            AmountError::ParseError(format!("invalid integer part: {}", integer_str))
+        })?;
 
-            // Ensure we don't exceed 4 decimal places
+        let decimal_part: i64 = if let Some(decimal_str) = decimal_str {
             if decimal_str.len() > DECIMAL_PLACES as usize {
                 return Err(AmountError::ParseError(format!(
                     "too many decimal places (max {})",
@@ -136,7 +148,13 @@ impl FromStr for Amount {
                 )));
             }
 
-            // Pad with zeros if less than 4 decimal places
+            if !decimal_str.chars().all(|c| c.is_ascii_digit()) {
+                return Err(AmountError::ParseError(format!(
+                    "invalid decimal part: {}",
+                    decimal_str
+                )));
+            }
+
             let padded = format!("{:0<4}", decimal_str);
             padded.parse().map_err(|_| {
                 AmountError::ParseError(format!("invalid decimal part: {}", decimal_str))
@@ -145,12 +163,16 @@ impl FromStr for Amount {
             0
         };
 
-        // Calculate raw value
-        let sign = if integer_part < 0 { -1 } else { 1 };
-        let raw = integer_part
+        let raw_abs = integer_part
             .checked_mul(SCALE_FACTOR)
-            .and_then(|v| v.checked_add(sign * decimal_part))
+            .and_then(|v| v.checked_add(decimal_part))
             .ok_or(AmountError::Overflow)?;
+
+        let raw = if sign < 0 {
+            raw_abs.checked_neg().ok_or(AmountError::Overflow)?
+        } else {
+            raw_abs
+        };
 
         Ok(Amount(raw))
     }

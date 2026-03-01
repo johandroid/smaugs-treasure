@@ -119,7 +119,7 @@ fn test_chargeback_locks_account() {
 #[test]
 fn test_csv_output_format() {
     let mut processor = PaymentProcessor::new();
-    let mut csv_processor = CsvProcessor::from_path(&fixture_path("simple.csv")).unwrap();
+    let mut csv_processor = CsvProcessor::from_path(fixture_path("simple.csv")).unwrap();
 
     csv_processor
         .process_stream(|result| {
@@ -366,4 +366,29 @@ dispute,1,1,
     assert_eq!(accounts[0].held, Amount::from_raw(1_000_000)); // 100.0
     assert_eq!(accounts[0].total(), Amount::from_raw(200_000)); // 20.0 total
     assert!(!accounts[0].locked);
+}
+
+#[test]
+fn test_dispute_client_mismatch_uses_original_client() {
+    let csv_data = "type,client,tx,amount
+deposit,1,1,10.0
+dispute,2,1,
+";
+    let file = create_temp_csv(csv_data);
+    let accounts = process_csv_file(file.path().to_path_buf());
+
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(accounts[0].client, 1);
+    assert_eq!(accounts[0].available, Amount::from_raw(0));
+    assert_eq!(accounts[0].held, Amount::from_raw(100_000));
+}
+
+#[test]
+fn test_negative_fractional_amount_is_not_credited() {
+    let csv_data = "type,client,tx,amount
+deposit,1,1,-0.5
+";
+    let file = create_temp_csv(csv_data);
+    let accounts = process_csv_file(file.path().to_path_buf());
+    assert!(accounts.is_empty());
 }

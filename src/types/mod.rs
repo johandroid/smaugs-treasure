@@ -12,17 +12,29 @@ pub use transaction::{Transaction, TransactionType};
 pub type TxId = u32;
 pub type ClientId = u16;
 
-/// Stored deposit data for dispute resolution.
-///
-/// Only deposits are stored since withdrawals cannot be disputed.
-/// This minimal representation optimizes memory usage by storing only
-/// the essential fields needed for dispute operations.
+/// Type of a monetary transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StoredDeposit {
-    /// Client ID that owns the deposit
-    pub client_id: u16,
-    /// Deposit amount
+pub enum MonetaryTxKind {
+    Deposit,
+    Withdrawal,
+}
+
+/// Stored monetary transaction data used as source-of-truth for references.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MonetaryTx {
+    /// Client ID that owns this transaction.
+    pub client_id: ClientId,
+    /// Transaction amount.
     pub amount: Amount,
+    /// Transaction kind.
+    pub kind: MonetaryTxKind,
+}
+
+impl MonetaryTx {
+    /// Returns true when this transaction is a deposit.
+    pub fn is_deposit(&self) -> bool {
+        matches!(self.kind, MonetaryTxKind::Deposit)
+    }
 }
 
 #[cfg(test)]

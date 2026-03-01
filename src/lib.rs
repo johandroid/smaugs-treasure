@@ -23,6 +23,7 @@
 //! processor.finalize_to_csv();
 //! ```
 
+pub mod app;
 pub mod cli;
 pub mod csv_processor;
 pub mod engine;
